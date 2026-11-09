@@ -6,3 +6,5 @@ example
 .DS_Store
 .cache
 /tools/__pycache__
+/poc/*/build/
+/poc/*/managed_components/

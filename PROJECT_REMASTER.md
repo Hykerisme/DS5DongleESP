@@ -26,13 +26,65 @@
 | -------------------- | -------------------------------------------------------------------- | -------------------------------------------------------------------------- |
 | **ESP32-S3**   | USB Device（TinyUSB），对 PC 枚举为**HID + UAC1 音频复合设备** | S3 有 USB OTG FS，TinyUSB 是 DS5Dongle 原生 USB 栈，描述符和回调可直接复用 |
 | **原版 ESP32** | **Classic BT HID Host**，连接 DualSense/DualSense Edge         | 唯一支持 BR/EDR 的 ESP32 系列芯片                                          |
-| **芯片间**     | UART（起步，2–4 Mbps + 硬件流控）或 SPI slave + GPIO IRQ            | 报告频率远低于链路带宽，UART 足够；SPI 为后续高吞吐场景预留                |
+| **芯片间**     | UART（起步，当前按 TX/RX + GND 设计）或 SPI slave + GPIO IRQ            | 报告频率远低于链路带宽，UART 足够；当前两块板的引脚图未标出可直接使用的 RTS/CTS，硬件流控暂不作为前提 |
 
 这一分工把**最难搬的 Classic BT 栈**留在原生支持的芯片上，把**最容易复用的 USB 描述符和报告翻译层**放在 S3 上，是当前约束下的最合理路径。
 
+## 0.1 当前硬件与引脚图记录
+
+以下内容来自项目目录中的引脚图图片识读，图片本身是当前硬件连接判断的依据；如果文字识读与实物丝印、板卡原理图或后续测量不一致，应以原图和实物为准。
+
+图片文件：
+
+- `ESP32.png`：原版 ESP32 开发板引脚图。
+- `esp32s3.png`：ESP32-S3 开发板引脚图。
+
+### 原版 ESP32 图片中明确标注的内容
+
+根据 `ESP32.png`：
+
+- `GPIO16` 标注为 `UART2_RXD`。
+- `GPIO17` 标注为 `UART2_TXD`。
+- 图片没有看到 `RTS`、`CTS` 或其他 UART 硬件流控专用标注。
+- 因此当前不能把 ESP32 侧的 RTS/CTS 当作已经确认存在的板级引脚；即使 ESP32 UART 外设/矩阵可能支持相关功能，也需要进一步查芯片手册、板卡原理图或实测确认。
+
+### ESP32-S3 图片中明确标注的内容
+
+根据 `esp32s3.png`：
+
+- `GPIO13` 和 `GPIO14` 均作为普通 `GP13`、`GP14` 引出。
+- 图片没有把 GPIO13/14 标为固定 UART TX/RX，但 ESP32-S3 的 GPIO Matrix 可用于将 UART 信号映射到这些 GPIO；具体 UART 控制器编号和方向由固件配置决定。
+- 图片顶部另行标出了 `D_P`、`D_N`，因此 USB D+/D− 与当前 GPIO13/14 UART 连接应视为不同信号。
+
+### 当前已接线关系
+
+两块板分别通过 USB 供电，并通过 GND 共地；不连接两块板的 3V3 输出。当前已接出的信号线为：
+
+```text
+ESP32-S3 GPIO13 (TX)  ->  ESP32 GPIO16 (UART2_RXD)
+ESP32-S3 GPIO14 (RX)  <-  ESP32 GPIO17 (UART2_TXD)
+ESP32-S3 GPIO15       ->  ESP32 GPIO4
+ESP32-S3 GPIO16       ->  ESP32 GPIO15
+ESP32-S3 GPIO17       ->  ESP32 GPIO2
+GND                   ---  GND
+```
+
+本项目暂定后三对线的逻辑定义为：
+
+```text
+ESP32-S3 GPIO15 (RTS)    ->  ESP32 GPIO4  (CTS)
+ESP32-S3 GPIO16 (CTS)    <-  ESP32 GPIO15 (RTS)
+ESP32-S3 GPIO17 (READY)  ->  ESP32 GPIO2  (LINK_READY)
+```
+
+这里的 TX/RX 与 RTS/CTS 方向均以信号名称为准：发送端连接对端接收端。两颗芯片都支持 GPIO Matrix，因此 UART2 和硬件流控信号可以映射到上述 GPIO；具体使用哪个 UART 控制器由各自固件配置决定。
+
+注意：原版 ESP32 的 GPIO15 和 GPIO2 都属于启动绑定位相关 GPIO。GPIO15 当前作为 ESP32 RTS 输入，GPIO2 当前作为 ESP32 LINK_READY 输入，不能在对端复位期间被 S3 主动驱动到不安全电平。初始固件必须先将 S3 GPIO15/16/17 配置为高阻/安全状态，再逐步启用 UART 和握手；若实测影响 ESP32 下载模式或正常启动，应停用 READY/硬件流控并回到三线 TX/RX/GND 方案，不能用软件强行覆盖启动绑定位约束。
+
+当前 POC-3 可按六线链路实现：TX、RX、RTS、CTS、READY、GND。协议层仍需保留帧同步、长度、序号和 CRC，即使启用 RTS/CTS 也不能把硬件流控当作数据完整性校验。
+
 ---
 
-## 1. 项目目标（当前阶段）
 
 ### 目标 1：将 DS5Dongle 移植到 ESP32-S3 + ESP32，稳定作为 USB Dongle 工作
 
