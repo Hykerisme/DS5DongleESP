@@ -465,6 +465,29 @@ static void handle_ble_device_result(struct ble_scan_result_evt_param *scan_rst)
  * BT GAP
  * */
 
+static void send_bt_security_status(uint8_t event_code, esp_bt_status_t status,
+                                     const uint8_t *bda)
+{
+    uint8_t payload[8] = {event_code, (uint8_t)status};
+    if (bda) {
+        memcpy(&payload[2], bda, ESP_BD_ADDR_LEN);
+    }
+    debug_link_send_status_detail(payload, sizeof(payload));
+}
+
+static void send_bt_passkey(uint32_t passkey, const uint8_t *bda)
+{
+    uint8_t payload[11] = {0x05,
+                           (uint8_t)passkey,
+                           (uint8_t)(passkey >> 8),
+                           (uint8_t)(passkey >> 16),
+                           (uint8_t)(passkey >> 24)};
+    if (bda) {
+        memcpy(&payload[5], bda, ESP_BD_ADDR_LEN);
+    }
+    debug_link_send_status_detail(payload, sizeof(payload));
+}
+
 static void bt_gap_event_handler(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_param_t *param)
 {
     switch (event) {
@@ -479,19 +502,34 @@ static void bt_gap_event_handler(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_para
         handle_bt_device_result(&param->disc_res);
         break;
     }
-#if (CONFIG_EXAMPLE_SSP_ENABLED)
-    case ESP_BT_GAP_KEY_NOTIF_EVT:
-        ESP_LOGI(TAG, "BT GAP KEY_NOTIF passkey:%06"PRIu32, param->key_notif.passkey);
-        break;
-    case ESP_BT_GAP_CFM_REQ_EVT: {
-        ESP_LOGI(TAG, "BT GAP CFM_REQ_EVT Please compare the numeric value: %06"PRIu32, param->cfm_req.num_val);
-        esp_bt_gap_ssp_confirm_reply(param->cfm_req.bda, true);
+    case ESP_BT_GAP_AUTH_CMPL_EVT: {
+        ESP_LOGI(TAG, "BT GAP AUTH_CMPL status=%d link_key_type=%d name=%s",
+                 param->auth_cmpl.stat, param->auth_cmpl.lk_type,
+                 param->auth_cmpl.device_name);
+        send_bt_security_status(0x02, param->auth_cmpl.stat, param->auth_cmpl.bda);
+        if (param->auth_cmpl.stat != ESP_BT_STATUS_SUCCESS) {
+            esp_err_t remove_status = esp_bt_gap_remove_bond_device(param->auth_cmpl.bda);
+            ESP_LOGW(TAG, "authentication failed; remove bond status=%s",
+                     esp_err_to_name(remove_status));
+        }
         break;
     }
-    case ESP_BT_GAP_KEY_REQ_EVT:
-        ESP_LOGI(TAG, "BT GAP KEY_REQ_EVT Please enter passkey!");
+    case ESP_BT_GAP_KEY_NOTIF_EVT:
+        ESP_LOGI(TAG, "BT GAP KEY_NOTIF passkey:%06" PRIu32,
+                 param->key_notif.passkey);
+        send_bt_passkey(param->key_notif.passkey, param->key_notif.bda);
         break;
-#endif
+    case ESP_BT_GAP_CFM_REQ_EVT:
+        ESP_LOGI(TAG, "BT GAP CFM_REQ_EVT value:%06" PRIu32,
+                 param->cfm_req.num_val);
+        send_bt_security_status(0x03, ESP_BT_STATUS_SUCCESS, param->cfm_req.bda);
+        esp_bt_gap_ssp_confirm_reply(param->cfm_req.bda, true);
+        break;
+    case ESP_BT_GAP_KEY_REQ_EVT:
+        ESP_LOGI(TAG, "BT GAP KEY_REQ_EVT replying with passkey 000000");
+        send_bt_security_status(0x04, ESP_BT_STATUS_SUCCESS, param->key_req.bda);
+        esp_bt_gap_ssp_passkey_reply(param->key_req.bda, true, 0);
+        break;
     case ESP_BT_GAP_MODE_CHG_EVT:
         ESP_LOGI(TAG, "BT GAP MODE_CHG_EVT mode:%d", param->mode_chg.mode);
         break;
@@ -521,12 +559,9 @@ static void bt_gap_event_handler(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_para
 static esp_err_t init_bt_gap(void)
 {
     esp_err_t ret;
-#if (CONFIG_EXAMPLE_SSP_ENABLED)
-    /* Set default parameters for Secure Simple Pairing */
     esp_bt_sp_param_t param_type = ESP_BT_SP_IOCAP_MODE;
     esp_bt_io_cap_t iocap = ESP_BT_IO_CAP_IO;
-    esp_bt_gap_set_security_param(param_type, &iocap, sizeof(uint8_t));
-#endif
+    esp_bt_gap_set_security_param(param_type, &iocap, sizeof(iocap));
     /*
      * Set default parameters for Legacy Pairing
      * Use variable pin, input pin code when pairing
@@ -1064,9 +1099,7 @@ static esp_err_t init_low_level(uint8_t mode)
     }
 
     esp_bluedroid_config_t bluedroid_cfg = BT_BLUEDROID_INIT_CONFIG_DEFAULT();
-#if (CONFIG_EXAMPLE_SSP_ENABLED == false)
-    bluedroid_cfg.ssp_en = false;
-#endif
+    bluedroid_cfg.ssp_en = true;
     ret = esp_bluedroid_init_with_cfg(&bluedroid_cfg);
     if (ret) {
         ESP_LOGE(TAG, "esp_bluedroid_init failed: %d", ret);

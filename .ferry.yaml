@@ -1,0 +1,23 @@
+version: 1
+
+project:
+  name: ds5-dongle-esp
+
+targets:
+  esp32-classic:
+    sync:
+      ignore:
+        - .git
+        - .venv
+        - dongle-debugger/node_modules
+        - poc/esp32-classic-hid-host/build
+        - poc/esp32s3-hid/build
+    build:
+      node: dev.node
+      workdir: .
+      out: poc/esp32-classic-hid-host/build/ds5_esp32_bt_host.bin
+      run_build: "pwsh -NoProfile -File tools/ferry-esp32.ps1 build"
+    deploy:
+      node: dev.node
+      workdir: .
+      run_deploy: "pwsh -NoProfile -File tools/ferry-esp32.ps1 flash"

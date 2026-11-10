@@ -3,7 +3,7 @@
 #include "bt_host.h"
 #include "uart_link.h"
 #include "nvs_flash.h"
-#include "esp_log.h"
+#include "debug_link.h"
 
 static const char *TAG = "app";
 
@@ -16,6 +16,7 @@ void app_main(void)
     }
     ESP_ERROR_CHECK(ret);
 
+    debug_link_init();
     uart_link_init();
     ESP_LOGI(TAG, "starting ESP32 Classic Bluetooth HID Host POC-2");
     bt_host_init();
